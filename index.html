@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Ink & Breath - Zen Riddle</title>
+
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-title" content="ZenPath">
+    <meta name="theme-color" content="#eaddd3">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="icon.png">
+
+    <style>
+        body { margin: 0; padding: 0; background-color: #eaddd3; overflow: hidden; font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif; }
+    </style>
+
+    <!-- ⚠️【强力清理缓存机制】⚠️ -->
+    <script>
+        if ("serviceWorker" in navigator) {
+            try {
+                navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                    for(let registration of registrations) {
+                        registration.unregister();
+                        console.log("【成功】已强行注销旧的 Service Worker 缓存，确保运行最新代码！");
+                    }
+                }).catch(function(err) {});
+            } catch (err) {}
+        }
+    </script>
+
+    <script type="module">
+        import zim from "https://zimjs.org/cdn/019/zim";
+        import "https://zimjs.org/cdn/019/zim_physics";
+        
+        // 【终极防御】：直接在全局写死画布尺寸，绝对不让宽和高变成 0！
+        const STAGE_W = 768;
+        const STAGE_H = 1024;
+
+        // ==========================================
+        // Model (数据层)
+        // ==========================================
+        class Model {
+            constructor() {
+                const m = this;
+                m.storageKey = "zenGarden_Riddle_EN_v14"; // 刷新防冲突键
+                
+                m.riddles = [
+                    { question: "I have cities, but no houses. I have mountains, but no trees.", options: ["Map", "Dream", "Globe"], answer: "Map" },
+                    { question: "I speak without a mouth and hear without ears.", options: ["Echo", "Cloud", "Ghost"], answer: "Echo" },
+                    { question: "The more of this there is, the less you see.", options: ["Darkness", "Light", "Fog"], answer: "Darkness" },
+                    { question: "What has keys but can't open locks?", options: ["Piano", "Chest", "Map"], answer: "Piano" },
+                    { question: "I have branches, but no fruit, trunk or leaves.", options: ["Bank", "River", "Tree"], answer: "Bank" },
+                    { question: "What can you catch, but not throw?", options: ["Cold", "Ball", "Bird"], answer: "Cold" },
+                    { question: "What runs all around a backyard, yet never moves?", options: ["Fence", "Dog", "Wind"], answer: "Fence" }
+                ];
+
+                if (localStorage && localStorage[m.storageKey]) {
+                    m.data = JSON.parse(localStorage[m.storageKey]);
+                    if (m.data.score === undefined) m.data.score = 0;
+                } else {
+                    m.data = { score: 0 };
+                }
+
+                // 鹅卵石初始位置 (下方)
+                m.items = [
+                    {id: 'stone1', type: 'stone', x: 250, y: 780, scale: 0.8, rot: 15, color: "#2d302f", sides: 5, radius: 50},
+                    {id: 'stone2', type: 'stone', x: 550, y: 880, scale: 0.8, rot: -20, color: "#4f5453", sides: 6, radius: 60},
+                    {id: 'stone3', type: 'stone', x: 150, y: 850, scale: 0.6, rot: 35, color: "#404342", sides: 5, radius: 55},
+                    {id: 'leaf1', type: 'leaf', x: 350, y: 920, scale: 0.8, rot: 45, color: "#5a6b5c", sides: 7, radius: 60},
+                    {id: 'leaf2', type: 'leaf', x: 500, y: 820, scale: 0.6, rot: 10, color: "#6e8271", sides: 5, radius: 50}
+                ];
+
+                m.getRandomRiddle = () => {
+                    return m.riddles[Math.floor(Math.random() * m.riddles.length)];
+                };
+
+                m.saveData = () => {
+                    if (localStorage) localStorage[m.storageKey] = JSON.stringify(m.data);
+                };
+                
+                m.clearData = () => {
+                    if (localStorage) localStorage.removeItem(m.storageKey);
+                    m.data.score = 0; 
+                }
+            }
+        }
+
+        // ==========================================
+        // View (视图层)
+        // ==========================================
+        class View {
+            constructor(m, W, H) {
+                const v = this;
+                v.itemsUI = [];
+                
+                v.bgLayer = new Container(W, H).addTo(); 
+                v.rippleLayer = new Container(W, H).addTo(); 
+                v.stoneLayer = new Container(W, H).addTo();  
+                v.uiLayer = new Container(W, H).addTo(); 
+                v.introLayer = new Container(W, H).addTo();
+
+                // === 游戏背景与特效 ===
+                new Rectangle(W, H, "#eaddd3").addTo(v.bgLayer);
+
+                const sandLayer = new Container(W, H).addTo(v.bgLayer);
+                for(let i = 0; i < 35; i++) {
+                    new Circle({radius: 50 + i * 30, color: "rgba(0,0,0,0)", borderColor: "#000000", borderWidth: 2}).alp(0.03).loc(W/2, -100, sandLayer);
+                }
+
+                v.inkTop = new Blob({color: "#000000", borderColor: "rgba(0,0,0,0)", points: 6, radius: 250, interactive: false}).alp(0.04).loc(0, 0, v.bgLayer);
+                v.inkTop.animate({props:{scale: 1.4}, time: 10, loop: true, rewind: true, ease: "sineInOut"}).wiggle("rotation", 0, -15, 15, 10, 20);
+
+                new Circle({radius: 260, color: "rgba(0,0,0,0)", borderColor: "#000000", borderWidth: 15, dashed: true}).alp(0.06).center(v.bgLayer).mov(0, -20).rot(45).wiggle("rotation", 45, -5, 5, 10, 20);
+
+                // === 游戏 UI 提示层 ===
+                v.gameRiddleLabel = new Label({
+                    text: "Loading...",
+                    size: 18,
+                    color: "#2d302f",
+                    font: "serif",
+                    align: "center", // 【修复】：重新加入文本居中属性
+                    lineWidth: W * 0.8
+                }).centerReg(v.uiLayer).pos(0, 80, CENTER, TOP); 
+
+                v.resetBtn = new Button({
+                    width: 60, height: 60, label: new Label({text:"RE\nSET", size: 14, color: "#f4eee6", font:"serif", align:"center"}),
+                    backgroundColor: "#a83232", rollBackgroundColor: "#822222", corner: 6
+                }).pos(40, 50, LEFT, BOTTOM, v.uiLayer).rot(-4); 
+
+                v.scoreLabel = new Label({
+                    text: "Insight: " + m.data.score,
+                    size: 26,
+                    color: "#2d302f",
+                    font: "serif"
+                }).alp(0.9).pos(40, 40, LEFT, TOP, v.uiLayer);
+
+                v.updateScore = (newScore) => {
+                    v.scoreLabel.text = "Insight: " + newScore;
+                    v.scoreLabel.animate({props:{scale: 1.2}, time: 0.15, rewind: true});
+                };
+
+                // === 第一屏：Intro 谜题屏 ===
+                new Rectangle(W, H, "#eaddd3").addTo(v.introLayer);
+                new Circle({radius: 200, color: "rgba(0,0,0,0)", borderColor: "#000000", borderWidth: 10, dashed: true}).alp(0.15).center(v.introLayer).wiggle("rotation", 45, -5, 5, 10, 20);
+
+                new Label({text: "ZEN PATH", size: 36, color: "#000000", font: "serif"}).alp(0.8).centerReg(v.introLayer).pos(0, 120, CENTER, TOP);
+                
+                v.introRiddleDisplay = new Label({
+                    text: "Loading riddle...",
+                    size: 26,
+                    color: "#1e1e1e",
+                    font: "serif",
+                    align: "center", // 【修复】：重新加入文本居中属性
+                    lineWidth: W * 0.8
+                }).centerReg(v.introLayer).mov(0, -20);
+
+                v.startBtn = new Button({
+                    width: 200, height: 55, 
+                    label: new Label({text:"BEGIN", size: 20, color: "#a83232", font:"serif", align:"center"}),
+                    backgroundColor: "#f4eee6", 
+                    rollBackgroundColor: "#ffffff", 
+                    borderColor: "#a83232", borderWidth: 2, corner: 30
+                }).center(v.introLayer).mov(0, 220);
+
+                // 渲染鹅卵石
+                m.items.forEach(data => {
+                    let item = new Poly({radius: data.radius, sides: data.sides, pointSize: 0, color: data.color, corner: 40});
+                    if (data.type === 'leaf') {
+                        new Circle(data.radius * 0.15, "#000000").alp(0.15).center(item);
+                        new Line(data.radius * 0.4, 2, "#000000").alp(0.1).center(item).rot(20);
+                    }
+                    item.reg(CENTER).loc(data.x, data.y, v.stoneLayer).sca(data.scale).rot(data.rot).sha("rgba(0,0,0,0.25)", 8, 15, 20); 
+                    item.dataId = data.id; 
+                    item.dataType = data.type;
+                    v.itemsUI.push(item); 
+                });
+            }
+        }
+
+        // ==========================================
+        // Controller (控制层 & 物理层)
+        // ==========================================
+        class Controller {
+            constructor(m, v, physics, W, H, F, S) {
+                const c = this;
+                c.dews = []; 
+                c.forceX = 0; 
+                c.forceY = 0; 
+                c.currentRiddle = null; 
+                c.isPlaying = false; 
+
+                // 物理引擎碰撞判定
+                v.itemsUI.forEach(item => {
+                    if (item.dataType === 'stone') {
+                        item.addPhysics({density: 5, bounciness: 0.1, linear: 3, angular: 3});
+                    } else {
+                        item.addPhysics({density: 0.8, bounciness: 0.4, linear: 1.5, angular: 1.5});
+                    }
+
+                    item.contact((obj) => {
+                        if (!c.isPlaying) return; 
+                        
+                        if (obj && obj.isDew && !obj.isCollected) {
+                            obj.isCollected = true; 
+                            c.isPlaying = false; 
+                            
+                            if (obj.isCorrect) {
+                                createRipple(obj.x, obj.y, "#00e5ff", 4);
+                                new Label({text: "CORRECT", color: "#00e5ff", size: 24, font: "serif"})
+                                    .centerReg(v.uiLayer).loc(obj.x, obj.y - 40)
+                                    .animate({props:{y: obj.y - 120, alpha: 0}, time: 2, call: lbl => lbl.removeFrom()});
+                                
+                                setTimeout(() => {
+                                    if(obj.body) physics.remove(obj); 
+                                    obj.removeFrom();
+                                    m.data.score += 10;
+                                    v.updateScore(m.data.score);
+                                    m.saveData();
+                                }, 50);
+
+                                setTimeout(() => c.prepareNextRiddle(), 2500);
+                                
+                            } else {
+                                createRipple(obj.x, obj.y, "#a83232", 2); 
+                                new Label({text: "WRONG", color: "#a83232", size: 20, font: "serif"})
+                                    .centerReg(v.uiLayer).loc(obj.x, obj.y - 40)
+                                    .animate({props:{y: obj.y - 100, alpha: 0}, time: 1.5, call: lbl => lbl.removeFrom()});
+                                
+                                setTimeout(() => {
+                                    if(obj.body) physics.remove(obj); 
+                                    obj.removeFrom();
+                                    m.data.score = Math.max(0, m.data.score - 5);
+                                    v.updateScore(m.data.score);
+                                    m.saveData();
+                                }, 50);
+
+                                v.gameRiddleLabel.animate({props: { color: "#a83232", scale: 1.05 }, time: 0.15, rewind: true, loop: true, loopCount: 2});
+                                setTimeout(() => c.prepareNextRiddle(), 2500);
+                            }
+
+                            const index = c.dews.indexOf(obj);
+                            if (index > -1) c.dews.splice(index, 1);
+                        } 
+                        else if (obj && !obj.isDew) {
+                            if (Math.abs(item.body.GetLinearVelocity().x) > 0.5 || Math.abs(item.body.GetLinearVelocity().y) > 0.5) {
+                                createRipple(item.x, item.y, "#ffffff", 1.5);
+                            }
+                        }
+                    });
+                });
+
+                function createRipple(x, y, color, targetScale=4) {
+                    new Circle({radius: 30, color: "rgba(0,0,0,0)", borderColor: color, borderWidth: 2})
+                        .loc(x, y, v.rippleLayer)
+                        .alp(0.5)
+                        .animate({props: {scale: targetScale, alpha: 0}, time: 1.5, ease: "sineOut", call: ripple => ripple.removeFrom()});
+                }
+
+                // ================= 游戏阶段控制 =================
+                c.prepareNextRiddle = () => {
+                    c.isPlaying = false; 
+                    
+                    c.dews.forEach(d => {
+                        if(d.body) physics.remove(d);
+                        d.removeFrom();
+                    });
+                    c.dews = [];
+
+                    c.currentRiddle = m.getRandomRiddle();
+                    v.introRiddleDisplay.text = c.currentRiddle.question;
+                    v.gameRiddleLabel.text = c.currentRiddle.question; 
+                    v.gameRiddleLabel.color = "#2d302f"; 
+
+                    v.itemsUI.forEach(item => {
+                        if (item.body) {
+                            let vel = item.body.GetLinearVelocity();
+                            if(vel) { vel.x = 0; vel.y = 0; item.body.SetLinearVelocity(vel); }
+                            item.body.SetAngularVelocity(0);
+                        }
+                    });
+
+                    v.introLayer.visible = true;
+                    v.introLayer.alp(0).animate({props:{alpha: 1}, time: 0.8});
+                    v.startBtn.alp(0).animate({props:{alpha: 1}, time: 1.5});
+                };
+
+                v.startBtn.tap(() => {
+                    v.introLayer.animate({
+                        props: {alpha: 0}, 
+                        time: 0.8, 
+                        call: () => { v.introLayer.visible = false; }
+                    });
+
+                    setTimeout(() => {
+                        c.isPlaying = true; 
+                        
+                        c.currentRiddle.options.forEach((opt, index) => {
+                            let spawnX = (W / (c.currentRiddle.options.length + 1)) * (index + 1);
+                            let spawnY = Math.floor(Math.random() * 41) + 80; 
+
+                            let dew = new Circle({radius: 45, color: "#ffffff", borderColor: "#00e5ff", borderWidth: 2})
+                                .loc(spawnX, spawnY, v.stoneLayer)
+                                .sha("rgba(0, 229, 255, 0.6)", 0, 0, 15)
+                                .alp(0);
+                            
+                            new Label({text: opt, size: 18, color: "#2d302f", font:"serif", align:"center"}).center(dew);
+                            
+                            dew.isDew = true;
+                            dew.isCorrect = (opt === c.currentRiddle.answer);
+                            dew.isCollected = false;
+
+                            dew.addPhysics({shape: "circle", density: 0.1, bounciness: 0.5, linear: 5});
+                            dew.body.SetFixedRotation(true); 
+
+                            dew.animate({props:{alpha:0.85}, time:0.8});
+                            c.dews.push(dew);
+                        });
+                    }, 500);
+                });
+
+                // 启动游戏逻辑
+                c.prepareNextRiddle();
+
+                v.resetBtn.tap(() => {
+                    m.clearData();
+                    v.resetBtn.animate({props:{rotation: -10}, time:0.1, rewind:true});
+                    v.updateScore(0);
+                    c.prepareNextRiddle(); 
+                });
+
+                // 防御空值：确保 F 对象存在且是移动端，才开启倾斜
+                if (F && F.on) {
+                    F.on("deviceorientation", e => {
+                        if (e.rotation && physics) {
+                            c.forceX = e.rotation.y * 1.5; 
+                            c.forceY = e.rotation.x * 1.5; 
+                        }
+                    });
+                }
+
+                // 防御空值：确保 S 对象存在，才开启鼠标测试
+                if (S && S.on) {
+                    S.on("stagemousemove", e => {
+                        if(F && !F.isMobile && physics) {
+                            c.forceX = (e.stageX - W/2) * 0.03;
+                            c.forceY = (e.stageY - H/2) * 0.03;
+                        }
+                    });
+                }
+
+                Ticker.add(() => {
+                    if (!physics || !c.isPlaying) return; 
+                    
+                    v.itemsUI.forEach(item => {
+                        if (item.body) {
+                            item.force(c.forceX, c.forceY);
+                            if (Math.abs(c.forceX) > 0.1 || Math.abs(c.forceY) > 0.1) item.body.SetAwake(true);
+                        }
+                    });
+
+                    c.dews.forEach(dew => {
+                        if (dew.body) {
+                            dew.force(c.forceX * 0.1, c.forceY * 0.1); 
+                            if (Math.abs(c.forceX) > 0.1 || Math.abs(c.forceY) > 0.1) dew.body.SetAwake(true);
+                            dew.rotation = 0; 
+                        }
+                    });
+                });
+            }
+        }
+
+        // ==========================================
+        // Bootstrap 引导程序
+        // ==========================================
+        // 直接使用 new Frame，不把它分配给报错的变量
+        new Frame(FIT, STAGE_W, STAGE_H, "#eaddd3", "#222", ready);
+
+        function ready(F, S, W, H) {
+            const physics = new Physics({gravity: 0, borders: new Boundary(0, 0, W, H)});
+            physics.drag(); 
+
+            const m = new Model();
+            const v = new View(m, W, H);
+            const c = new Controller(m, v, physics, W, H, F, S); 
+        }
+    </script>
+</head>
+<body></body>
+</html>
